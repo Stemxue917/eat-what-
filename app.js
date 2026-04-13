@@ -367,11 +367,10 @@ async function fetchPlaces(location, filters) {
   });
 
   const response = await fetch(`/api/places?${params.toString()}`);
-  if (!response.ok) {
-    throw new Error("Failed to fetch places.");
-  }
-
   const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.details || data.error || "Failed to fetch places.");
+  }
   return (data.places || []).map((place) => ({
     ...place,
     price: bucketPriceLevel(place.priceLevel),
@@ -423,7 +422,7 @@ async function runRecommendation() {
     state.currentPlaces = await fetchPlaces(location, state.filters);
   } catch (error) {
     elements.locationStatus.textContent =
-      "目前無法取得 Google 餐廳資料，請確認 Vercel 環境變數與 Google Places API 是否已啟用。";
+      `目前無法取得 Google 餐廳資料：${error instanceof Error ? error.message : "未知錯誤"}`;
     return;
   }
 

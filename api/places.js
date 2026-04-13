@@ -132,7 +132,7 @@ module.exports = async function handler(req, res) {
   const type = String(req.query.type || "");
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-    res.status(400).json({ error: "Missing valid lat/lng." });
+    res.status(400).json({ error: "Missing valid lat/lng.", details: "請提供有效的緯度與經度。" });
     return;
   }
 
@@ -167,7 +167,10 @@ module.exports = async function handler(req, res) {
 
     if (!response.ok) {
       const errorText = await response.text();
-      res.status(response.status).json({ error: errorText || "Google Places request failed." });
+      res.status(response.status).json({
+        error: "Google Places request failed.",
+        details: errorText || "Google Places API 沒有回傳可讀取的錯誤訊息。",
+      });
       return;
     }
 
@@ -183,6 +186,9 @@ module.exports = async function handler(req, res) {
 
     res.status(200).json({ places });
   } catch (error) {
-    res.status(500).json({ error: "Failed to search nearby places." });
+    res.status(500).json({
+      error: "Failed to search nearby places.",
+      details: error instanceof Error ? error.message : "未知錯誤",
+    });
   }
 };
