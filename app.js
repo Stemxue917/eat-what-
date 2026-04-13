@@ -5,6 +5,7 @@ const STORAGE_KEYS = {
 };
 
 const NEARBY_RADIUS_KM = 1.5;
+const NEARBY_RADIUS_METERS = NEARBY_RADIUS_KM * 1000;
 
 const DEFAULT_IMAGE =
   "data:image/svg+xml;utf8," +
@@ -73,6 +74,32 @@ const PRICE_LABELS = {
   "1000+": "1000 元以上",
 };
 
+const TYPE_KEYWORDS = {
+  "": [],
+  火鍋: ["火鍋", "鍋物", "麻辣鍋"],
+  便當: ["便當", "餐盒"],
+  炸物: ["炸雞", "鹽酥雞", "炸物"],
+  麵食: ["麵", "拉麵", "牛肉麵", "麵店"],
+  壽司: ["壽司", "日式", "生魚片"],
+  素食: ["素食", "蔬食"],
+  早餐: ["早餐", "早午餐", "brunch"],
+  咖哩: ["咖哩", "curry"],
+  水餃: ["水餃", "鍋貼", "餃子"],
+  燒肉: ["燒肉", "烤肉", "居酒屋"],
+  拉麵: ["拉麵"],
+  塔可: ["塔可", "墨西哥"],
+  咖啡: ["咖啡", "咖啡廳", "cafe"],
+  漢堡: ["漢堡", "burger"],
+};
+
+const TIME_KEYWORDS = {
+  "": [],
+  breakfast: ["早餐", "早午餐", "brunch"],
+  lunch: ["午餐", "餐廳"],
+  dinner: ["晚餐", "餐廳"],
+  "late-night": ["宵夜", "深夜", "late night"],
+};
+
 const state = {
   filters: {
     time: "",
@@ -87,6 +114,8 @@ const state = {
   location: null,
   currentResult: null,
   currentPlaces: [],
+  googleMapsReady: false,
+  placesService: null,
 };
 
 const elements = {
@@ -113,6 +142,7 @@ const elements = {
   resultTags: document.getElementById("result-tags"),
   resultMapLink: document.getElementById("result-map-link"),
   resultImage: document.getElementById("result-image"),
+  mapRoot: document.getElementById("map-root"),
 };
 
 function loadStoredArray(key) {
@@ -126,15 +156,6 @@ function loadStoredArray(key) {
 
 function saveStoredArray(key, value) {
   window.localStorage.setItem(key, JSON.stringify(value));
-}
-
-function uniqueValues(list) {
-  return [...new Set(list)];
-}
-
-function intersects(listA, listB) {
-  const setB = new Set(listB);
-  return listA.some((item) => setB.has(item));
 }
 
 function randomItem(list) {
@@ -162,36 +183,54 @@ function getDistanceKm(from, to) {
   return 2 * earthRadiusKm * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function withDistance(restaurants, location) {
-  return restaurants.map((restaurant) => {
-    if (!location || !restaurant.location) {
-      return restaurant;
-    }
+function normalizePriceLevel(priceLevel) {
+  const mapping = {
+    0: "0-200",
+    1: "0-200",
+    2: "200-500",
+    3: "500-1000",
+    4: "1000+",
+  };
 
-    return {
-      ...restaurant,
-      distanceKm: getDistanceKm(location, restaurant.location),
-    };
-  });
+  return mapping[priceLevel] || "";
 }
 
-function matchesDislike(restaurant, dislikes) {
+function buildKeyword(filters) {
+  return [...TIME_KEYWORDS[filters.time] || [], ...TYPE_KEYWORDS[filters.type] || []]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function matchesPrice(place, selectedPrice) {
+  if (!selectedPrice) {
+    return true;
+  }
+  return place.price === selectedPrice;
+}
+
+function matchesType(place, selectedType) {
+  if (!selectedType) {
+    return true;
+  }
+
+  const haystack = `${place.name} ${place.type} ${(place.tags || []).join(" ")}`.toLowerCase();
+  return (TYPE_KEYWORDS[selectedType] || []).some((keyword) =>
+    haystack.includes(keyword.toLowerCase())
+  );
+}
+
+function matchesDislike(place, dislikes) {
   if (dislikes.length === 0) {
     return false;
   }
 
-  const haystack = `${restaurant.name} ${restaurant.type} ${(restaurant.tags || []).join(" ")}`.toLowerCase();
+  const haystack = `${place.name} ${place.type} ${(place.tags || []).join(" ")}`.toLowerCase();
   return dislikes.some((dislike) => haystack.includes(dislike.toLowerCase()));
 }
 
 function chooseRestaurant(list, user) {
-  const withoutDislikes = list.filter(
-    (restaurant) => !matchesDislike(restaurant, user.dislikes)
-  );
-
-  const withoutHistory = withoutDislikes.filter(
-    (restaurant) => !user.history.includes(restaurant.id)
-  );
+  const withoutDislikes = list.filter((place) => !matchesDislike(place, user.dislikes));
+  const withoutHistory = withoutDislikes.filter((place) => !user.history.includes(place.id));
 
   if (withoutHistory.length > 0) {
     return randomItem(withoutHistory);
@@ -201,7 +240,7 @@ function chooseRestaurant(list, user) {
     return randomItem(withoutDislikes);
   }
 
-  const noHistoryList = list.filter((restaurant) => !user.history.includes(restaurant.id));
+  const noHistoryList = list.filter((place) => !user.history.includes(place.id));
   if (noHistoryList.length > 0) {
     return randomItem(noHistoryList);
   }
@@ -209,33 +248,16 @@ function chooseRestaurant(list, user) {
   return list.length > 0 ? randomItem(list) : null;
 }
 
-function recommend(restaurants, user, location) {
-  const enriched = withDistance(restaurants, location);
-  const nearbyFiltered = enriched.filter(
-    (restaurant) =>
-      typeof restaurant.distanceKm === "number" && restaurant.distanceKm <= NEARBY_RADIUS_KM
-  );
-
-  if (location) {
-    return chooseRestaurant(nearbyFiltered, user);
-  }
-
-  return chooseRestaurant(enriched, user);
-}
-
-function updateHistory(restaurant) {
-  const nextHistory = [restaurant.id, ...state.user.history.filter((id) => id !== restaurant.id)].slice(
-    0,
-    5
-  );
+function updateHistory(place) {
+  const nextHistory = [place.id, ...state.user.history.filter((id) => id !== place.id)].slice(0, 5);
   const nextHistoryCache = [
     {
-      id: restaurant.id,
-      name: restaurant.name,
-      type: restaurant.type,
-      price: restaurant.price,
+      id: place.id,
+      name: place.name,
+      type: place.type,
+      price: place.price,
     },
-    ...state.historyCache.filter((entry) => entry.id !== restaurant.id),
+    ...state.historyCache.filter((entry) => entry.id !== place.id),
   ].slice(0, 5);
 
   state.user.history = nextHistory;
@@ -279,10 +301,7 @@ function renderDislikes() {
       button.classList.add("is-active");
     }
 
-    button.addEventListener("click", () => {
-      toggleDislike(tag);
-    });
-
+    button.addEventListener("click", () => toggleDislike(tag));
     elements.dislikeTags.appendChild(button);
   });
 }
@@ -319,67 +338,154 @@ function showView(viewName) {
   elements.resultView.classList.toggle("view-active", !showingHome);
 }
 
-function renderResult(restaurant) {
-  state.currentResult = restaurant;
-  elements.resultTitle.textContent = restaurant.name;
-  elements.resultType.textContent = restaurant.type;
-  elements.resultPrice.textContent = PRICE_LABELS[restaurant.price] || restaurant.price || "價格未知";
+function renderResult(place) {
+  state.currentResult = place;
+  elements.resultTitle.textContent = place.name;
+  elements.resultType.textContent = place.type || "餐廳";
+  elements.resultPrice.textContent = PRICE_LABELS[place.price] || place.price || "價格未知";
   elements.resultDistance.textContent =
-    typeof restaurant.distanceKm === "number"
-      ? `距離你約 ${restaurant.distanceKm.toFixed(2)} 公里`
-      : "尚未取得定位，先依你的篩選條件推薦。";
-  elements.resultAddress.textContent = restaurant.address
-    ? `地址：${restaurant.address}`
-    : "";
+    typeof place.distanceKm === "number"
+      ? `距離你約 ${place.distanceKm.toFixed(2)} 公里`
+      : "尚未取得定位。";
+  elements.resultAddress.textContent = place.address ? `地址：${place.address}` : "";
   elements.resultTimes.textContent = state.filters.time
     ? `搜尋時段：${TIME_LABELS[state.filters.time] || state.filters.time}`
     : "搜尋時段：不限";
-  elements.resultTags.textContent = `標籤：${(restaurant.tags || []).join("、") || "無"}`;
+  elements.resultTags.textContent = `標籤：${(place.tags || []).join("、") || "無"}`;
   elements.resultMapLink.href =
-    restaurant.googleMapsUrl ||
-    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-      restaurant.address || restaurant.name
-    )}`;
-  elements.resultImage.src = restaurant.image || DEFAULT_IMAGE;
-  elements.resultImage.alt = restaurant.name;
+    place.googleMapsUrl ||
+    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.address || place.name)}`;
+  elements.resultImage.src = place.image || DEFAULT_IMAGE;
+  elements.resultImage.alt = place.name;
   showView("result");
 }
 
-function bucketPriceLevel(priceLevel) {
-  const priceMap = {
-    PRICE_LEVEL_FREE: "0-200",
-    PRICE_LEVEL_INEXPENSIVE: "0-200",
-    PRICE_LEVEL_MODERATE: "200-500",
-    PRICE_LEVEL_EXPENSIVE: "500-1000",
-    PRICE_LEVEL_VERY_EXPENSIVE: "1000+",
-  };
+async function fetchMapsConfig() {
+  const response = await fetch("/api/maps-config");
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "無法取得 Google Maps 設定。");
+  }
+  return data;
+}
 
-  return priceMap[priceLevel] || "";
+function loadGoogleMapsScript(apiKey) {
+  return new Promise((resolve, reject) => {
+    if (window.google?.maps?.places) {
+      resolve();
+      return;
+    }
+
+    const existingScript = document.querySelector('script[data-google-maps="true"]');
+    if (existingScript) {
+      existingScript.addEventListener("load", () => resolve(), { once: true });
+      existingScript.addEventListener("error", () => reject(new Error("Google Maps 載入失敗。")), {
+        once: true,
+      });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src =
+      `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places`;
+    script.async = true;
+    script.defer = true;
+    script.dataset.googleMaps = "true";
+    script.addEventListener("load", () => resolve(), { once: true });
+    script.addEventListener("error", () => reject(new Error("Google Maps 載入失敗。")), {
+      once: true,
+    });
+    document.head.appendChild(script);
+  });
+}
+
+async function ensureGoogleMapsReady() {
+  if (state.googleMapsReady && state.placesService) {
+    return;
+  }
+
+  const { apiKey } = await fetchMapsConfig();
+  await loadGoogleMapsScript(apiKey);
+
+  if (!window.google?.maps?.places) {
+    throw new Error("Google Places Library 尚未載入。");
+  }
+
+  const map = new window.google.maps.Map(elements.mapRoot, {
+    center: { lat: 25.033, lng: 121.5654 },
+    zoom: 14,
+  });
+
+  state.placesService = new window.google.maps.places.PlacesService(map);
+  state.googleMapsReady = true;
+}
+
+function searchNearbyPlaces(location, filters) {
+  return new Promise((resolve, reject) => {
+    const request = {
+      location: new window.google.maps.LatLng(location.lat, location.lng),
+      radius: NEARBY_RADIUS_METERS,
+      type: "restaurant",
+      keyword: buildKeyword(filters) || undefined,
+      openNow: filters.time === "late-night" || undefined,
+    };
+
+    state.placesService.nearbySearch(request, (results, status) => {
+      if (
+        status !== window.google.maps.places.PlacesServiceStatus.OK &&
+        status !== window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS
+      ) {
+        reject(new Error(`Google Places Nearby Search 失敗：${status}`));
+        return;
+      }
+
+      resolve(results || []);
+    });
+  });
+}
+
+function normalizePlaceResult(place, origin) {
+  const location =
+    place.geometry?.location
+      ? {
+          lat: place.geometry.location.lat(),
+          lng: place.geometry.location.lng(),
+        }
+      : null;
+
+  return {
+    id: place.place_id,
+    name: place.name || "未命名餐廳",
+    type: place.types?.[0] || "餐廳",
+    price: normalizePriceLevel(place.price_level),
+    address: place.vicinity || place.formatted_address || "",
+    tags: place.types || [],
+    googleMapsUrl: place.place_id
+      ? `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(place.place_id)}`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name || "")}`,
+    image: place.photos?.[0]
+      ? place.photos[0].getUrl({ maxWidth: 900, maxHeight: 675 })
+      : DEFAULT_IMAGE,
+    location,
+    distanceKm: origin && location ? getDistanceKm(origin, location) : null,
+  };
 }
 
 async function fetchPlaces(location, filters) {
-  const params = new URLSearchParams({
-    lat: String(location.lat),
-    lng: String(location.lng),
-    time: filters.time,
-    price: filters.price,
-    type: filters.type,
-  });
-
-  const response = await fetch(`/api/places?${params.toString()}`);
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.details || data.error || "Failed to fetch places.");
-  }
-  return (data.places || []).map((place) => ({
-    ...place,
-    price: bucketPriceLevel(place.priceLevel),
-  }));
+  await ensureGoogleMapsReady();
+  const results = await searchNearbyPlaces(location, filters);
+  return results
+    .map((place) => normalizePlaceResult(place, location))
+    .filter((place) => place.location && place.distanceKm !== null)
+    .filter((place) => place.distanceKm <= NEARBY_RADIUS_KM)
+    .filter((place) => matchesPrice(place, filters.price))
+    .filter((place) => matchesType(place, filters.type))
+    .sort((a, b) => a.distanceKm - b.distanceKm);
 }
 
 async function requestLocation() {
   if (!("geolocation" in navigator)) {
-    elements.locationStatus.textContent = "此裝置不支援定位，會改用一般推薦。";
+    elements.locationStatus.textContent = "此裝置不支援定位。";
     return null;
   }
 
@@ -397,7 +503,7 @@ async function requestLocation() {
         resolve(nextLocation);
       },
       () => {
-        elements.locationStatus.textContent = "定位失敗或被拒絕，會改用一般推薦。";
+        elements.locationStatus.textContent = "定位失敗或被拒絕。";
         resolve(null);
       },
       {
@@ -426,9 +532,9 @@ async function runRecommendation() {
     return;
   }
 
-  const choice = recommend(state.currentPlaces, state.user, location);
+  const choice = chooseRestaurant(state.currentPlaces, state.user);
   if (!choice) {
-    elements.locationStatus.textContent = `目前 ${NEARBY_RADIUS_KM} 公里內沒有符合條件的 Google 餐廳結果。`;
+    elements.locationStatus.textContent = `目前 ${NEARBY_RADIUS_KM} 公里內沒有符合條件的餐廳結果。`;
     return;
   }
 
@@ -466,7 +572,9 @@ function attachEvents() {
   });
   elements.clearHistory.addEventListener("click", () => {
     state.user.history = [];
+    state.historyCache = [];
     saveStoredArray(STORAGE_KEYS.history, []);
+    saveStoredArray(STORAGE_KEYS.historyCache, []);
     renderHistory();
   });
 }
