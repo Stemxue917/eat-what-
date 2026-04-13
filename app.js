@@ -74,6 +74,9 @@ const PRICE_LABELS = {
   "1000+": "1000 元以上",
 };
 
+const GOOGLE_SCRIPT_TIMEOUT_MS = 12000;
+const PLACES_SEARCH_TIMEOUT_MS = 15000;
+
 const TYPE_KEYWORDS = {
   "": [],
   火鍋: ["火鍋", "鍋物", "麻辣鍋"],
@@ -160,6 +163,24 @@ function saveStoredArray(key, value) {
 
 function randomItem(list) {
   return list[Math.floor(Math.random() * list.length)];
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+
+    promise
+      .then((value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      });
+  });
 }
 
 function toRadians(value) {
@@ -370,33 +391,53 @@ async function fetchMapsConfig() {
 }
 
 function loadGoogleMapsScript(apiKey) {
-  return new Promise((resolve, reject) => {
-    if (window.google?.maps?.places) {
-      resolve();
-      return;
-    }
+  return withTimeout(
+    new Promise((resolve, reject) => {
+      if (window.google?.maps?.places) {
+        resolve();
+        return;
+      }
 
-    const existingScript = document.querySelector('script[data-google-maps="true"]');
-    if (existingScript) {
-      existingScript.addEventListener("load", () => resolve(), { once: true });
-      existingScript.addEventListener("error", () => reject(new Error("Google Maps 載入失敗。")), {
-        once: true,
-      });
-      return;
-    }
+      const existingScript = document.querySelector('script[data-google-maps="true"]');
+      if (existingScript) {
+        if (existingScript.dataset.loaded === "true" && window.google?.maps?.places) {
+          resolve();
+          return;
+        }
 
-    const script = document.createElement("script");
-    script.src =
-      `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places`;
-    script.async = true;
-    script.defer = true;
-    script.dataset.googleMaps = "true";
-    script.addEventListener("load", () => resolve(), { once: true });
-    script.addEventListener("error", () => reject(new Error("Google Maps 載入失敗。")), {
-      once: true,
-    });
-    document.head.appendChild(script);
-  });
+        existingScript.addEventListener("load", () => resolve(), { once: true });
+        existingScript.addEventListener(
+          "error",
+          () => reject(new Error("Google Maps 載入失敗。")),
+          { once: true }
+        );
+        return;
+      }
+
+      const script = document.createElement("script");
+      script.src =
+        `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places`;
+      script.async = true;
+      script.defer = true;
+      script.dataset.googleMaps = "true";
+      script.addEventListener(
+        "load",
+        () => {
+          script.dataset.loaded = "true";
+          resolve();
+        },
+        { once: true }
+      );
+      script.addEventListener(
+        "error",
+        () => reject(new Error("Google Maps 載入失敗。")),
+        { once: true }
+      );
+      document.head.appendChild(script);
+    }),
+    GOOGLE_SCRIPT_TIMEOUT_MS,
+    "Google Maps 載入逾時，請稍後再試。"
+  );
 }
 
 async function ensureGoogleMapsReady() {
@@ -421,27 +462,31 @@ async function ensureGoogleMapsReady() {
 }
 
 function searchNearbyPlaces(location, filters) {
-  return new Promise((resolve, reject) => {
-    const request = {
-      location: new window.google.maps.LatLng(location.lat, location.lng),
-      radius: NEARBY_RADIUS_METERS,
-      type: "restaurant",
-      keyword: buildKeyword(filters) || undefined,
-      openNow: filters.time === "late-night" || undefined,
-    };
+  return withTimeout(
+    new Promise((resolve, reject) => {
+      const request = {
+        location: new window.google.maps.LatLng(location.lat, location.lng),
+        radius: NEARBY_RADIUS_METERS,
+        type: "restaurant",
+        keyword: buildKeyword(filters) || undefined,
+        openNow: filters.time === "late-night" || undefined,
+      };
 
-    state.placesService.nearbySearch(request, (results, status) => {
-      if (
-        status !== window.google.maps.places.PlacesServiceStatus.OK &&
-        status !== window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS
-      ) {
-        reject(new Error(`Google Places Nearby Search 失敗：${status}`));
-        return;
-      }
+      state.placesService.nearbySearch(request, (results, status) => {
+        if (
+          status !== window.google.maps.places.PlacesServiceStatus.OK &&
+          status !== window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS
+        ) {
+          reject(new Error(`Google Places Nearby Search 失敗：${status}`));
+          return;
+        }
 
-      resolve(results || []);
-    });
-  });
+        resolve(results || []);
+      });
+    }),
+    PLACES_SEARCH_TIMEOUT_MS,
+    "附近餐廳搜尋逾時，請再試一次。"
+  );
 }
 
 function normalizePlaceResult(place, origin) {
@@ -585,6 +630,7 @@ async function init() {
   renderHistory();
   attachEvents();
   registerServiceWorker();
+  fetchMapsConfig().catch(() => {});
 }
 
 init().catch(() => {
