@@ -380,16 +380,7 @@ function renderResult(place) {
 }
 
 function buildGoogleMapsUrl(place) {
-  if (place.location) {
-    const query = place.name && place.address
-      ? `${place.name} ${place.address}`
-      : place.name || place.address || `${place.location.lat},${place.location.lng}`;
-
-    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
-  }
-
-  return place.googleMapsUrl ||
-    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.address || place.name)}`;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name || place.address || "")}`;
 }
 
 async function fetchMapsConfig() {
@@ -517,7 +508,7 @@ function normalizePlaceResult(place, origin) {
     address: place.vicinity || place.formatted_address || "",
     tags: place.types || [],
     googleMapsUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-      [place.name || "", place.vicinity || place.formatted_address || ""].filter(Boolean).join(" ")
+      place.name || ""
     )}`,
     image: place.photos?.[0]
       ? place.photos[0].getUrl({ maxWidth: 900, maxHeight: 675 })
