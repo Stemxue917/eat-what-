@@ -4,8 +4,7 @@ const STORAGE_KEYS = {
   historyCache: "what-to-eat-history-cache",
 };
 
-const NEARBY_RADIUS_KM = 1.5;
-const NEARBY_RADIUS_METERS = NEARBY_RADIUS_KM * 1000;
+const DEFAULT_RADIUS_KM = 1.5;
 
 const DEFAULT_IMAGE =
   "data:image/svg+xml;utf8," +
@@ -27,6 +26,7 @@ const DEFAULT_IMAGE =
 
 const TIMES = ["breakfast", "lunch", "dinner", "late-night"];
 const PRICES = ["0-200", "200-500", "500-1000", "1000+"];
+const DISTANCE_OPTIONS = ["0.5", "1", "1.5", "3", "5"];
 
 const TYPE_OPTIONS = [
   "火鍋",
@@ -108,6 +108,7 @@ const state = {
     time: "",
     price: "",
     type: "",
+    distance: String(DEFAULT_RADIUS_KM),
   },
   user: {
     dislikes: loadStoredArray(STORAGE_KEYS.dislikes),
@@ -130,6 +131,7 @@ const elements = {
   timeFilter: document.getElementById("time-filter"),
   priceFilter: document.getElementById("price-filter"),
   typeFilter: document.getElementById("type-filter"),
+  distanceFilter: document.getElementById("distance-filter"),
   locateButton: document.getElementById("locate-button"),
   locationStatus: document.getElementById("location-status"),
   dislikeTags: document.getElementById("dislike-tags"),
@@ -214,6 +216,14 @@ function normalizePriceLevel(priceLevel) {
   };
 
   return mapping[priceLevel] || "";
+}
+
+function getSelectedRadiusKm() {
+  return Number(state.filters.distance || DEFAULT_RADIUS_KM);
+}
+
+function getSelectedRadiusMeters() {
+  return getSelectedRadiusKm() * 1000;
 }
 
 function buildKeyword(filters) {
@@ -351,6 +361,7 @@ function syncFilters() {
   state.filters.time = elements.timeFilter.value;
   state.filters.price = elements.priceFilter.value;
   state.filters.type = elements.typeFilter.value;
+  state.filters.distance = elements.distanceFilter.value || String(DEFAULT_RADIUS_KM);
 }
 
 function showView(viewName) {
@@ -468,7 +479,7 @@ function searchNearbyPlaces(location, filters) {
     new Promise((resolve, reject) => {
       const request = {
         location: new window.google.maps.LatLng(location.lat, location.lng),
-        radius: NEARBY_RADIUS_METERS,
+        radius: getSelectedRadiusMeters(),
         type: "restaurant",
         keyword: buildKeyword(filters) || undefined,
         openNow: filters.time === "late-night" || undefined,
@@ -524,7 +535,7 @@ async function fetchPlaces(location, filters) {
   return results
     .map((place) => normalizePlaceResult(place, location))
     .filter((place) => place.location && place.distanceKm !== null)
-    .filter((place) => place.distanceKm <= NEARBY_RADIUS_KM)
+    .filter((place) => place.distanceKm <= getSelectedRadiusKm())
     .filter((place) => matchesPrice(place, filters.price))
     .filter((place) => matchesType(place, filters.type))
     .sort((a, b) => a.distanceKm - b.distanceKm);
@@ -546,7 +557,7 @@ async function requestLocation() {
           lng: position.coords.longitude,
         };
         state.location = nextLocation;
-        elements.locationStatus.textContent = `已取得定位，將優先推薦 ${NEARBY_RADIUS_KM} 公里內餐廳。`;
+        elements.locationStatus.textContent = `已取得定位，將優先推薦 ${getSelectedRadiusKm()} 公里內餐廳。`;
         resolve(nextLocation);
       },
       () => {
@@ -581,11 +592,11 @@ async function runRecommendation() {
 
   const choice = chooseRestaurant(state.currentPlaces, state.user);
   if (!choice) {
-    elements.locationStatus.textContent = `目前 ${NEARBY_RADIUS_KM} 公里內沒有符合條件的餐廳結果。`;
+    elements.locationStatus.textContent = `目前 ${getSelectedRadiusKm()} 公里內沒有符合條件的餐廳結果。`;
     return;
   }
 
-  elements.locationStatus.textContent = `已取得附近資料，優先推薦 ${NEARBY_RADIUS_KM} 公里內餐廳。`;
+  elements.locationStatus.textContent = `已取得附近資料，優先推薦 ${getSelectedRadiusKm()} 公里內餐廳。`;
   renderResult(choice);
   updateHistory(choice);
 }
@@ -594,6 +605,8 @@ function initFilters() {
   populateSelect(elements.timeFilter, TIMES, (value) => TIME_LABELS[value] || value);
   populateSelect(elements.priceFilter, PRICES, (value) => PRICE_LABELS[value] || value);
   populateSelect(elements.typeFilter, TYPE_OPTIONS, (value) => value);
+  populateSelect(elements.distanceFilter, DISTANCE_OPTIONS, (value) => `${value} 公里內`);
+  elements.distanceFilter.value = String(DEFAULT_RADIUS_KM);
 }
 
 function registerServiceWorker() {
@@ -612,6 +625,12 @@ function attachEvents() {
   elements.timeFilter.addEventListener("change", syncFilters);
   elements.priceFilter.addEventListener("change", syncFilters);
   elements.typeFilter.addEventListener("change", syncFilters);
+  elements.distanceFilter.addEventListener("change", () => {
+    syncFilters();
+    if (state.location) {
+      elements.locationStatus.textContent = `目前將以 ${getSelectedRadiusKm()} 公里作為搜尋範圍。`;
+    }
+  });
   elements.clearDislikes.addEventListener("click", () => {
     state.user.dislikes = [];
     saveStoredArray(STORAGE_KEYS.dislikes, []);
