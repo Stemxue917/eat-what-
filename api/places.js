@@ -27,10 +27,10 @@ const TIME_KEYWORDS = {
 };
 
 const PRICE_BUCKETS = {
-  "0-200": ["PRICE_LEVEL_FREE", "PRICE_LEVEL_INEXPENSIVE"],
-  "200-500": ["PRICE_LEVEL_MODERATE"],
-  "500-1000": ["PRICE_LEVEL_EXPENSIVE"],
-  "1000+": ["PRICE_LEVEL_VERY_EXPENSIVE"],
+  "0-200": [0, 1],
+  "200-500": [2],
+  "500-1000": [3],
+  "1000+": [4],
 };
 
 function toRadians(value) {
@@ -60,21 +60,26 @@ function normalizePlace(place, origin) {
         lat: place.location.latitude,
         lng: place.location.longitude,
       }
+    : place.geometry?.location
+      ? {
+          lat: place.geometry.location.lat,
+          lng: place.geometry.location.lng,
+        }
     : null;
 
   return {
-    id: place.id,
-    name: place.displayName?.text || "未命名餐廳",
-    type: place.primaryTypeDisplayName?.text || "餐廳",
-    priceLevel: place.priceLevel || "PRICE_LEVEL_UNSPECIFIED",
-    address: place.formattedAddress || "",
-    tags: [...new Set([...(place.types || []), place.primaryTypeDisplayName?.text || ""])].filter(
-      Boolean
-    ),
+    id: place.id || place.place_id,
+    name: place.displayName?.text || place.name || "未命名餐廳",
+    type: place.primaryTypeDisplayName?.text || place.types?.[0] || "餐廳",
+    priceLevel: place.priceLevel ?? place.price_level ?? null,
+    address: place.formattedAddress || place.vicinity || "",
+    tags: [...new Set([...(place.types || []), place.primaryTypeDisplayName?.text || ""])].filter(Boolean),
     googleMapsUrl:
       place.googleMapsLinks?.placeUri ||
       place.googleMapsLinks?.directionsUri ||
-      null,
+      (place.place_id
+        ? `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(place.place_id)}`
+        : null),
     location,
     distanceKm:
       origin && location ? getDistanceKm(origin, location) : null,
@@ -138,32 +143,21 @@ module.exports = async function handler(req, res) {
 
   const requestBody = {
     textQuery: buildTextQuery(time, type),
-    languageCode: "zh-TW",
-    regionCode: "TW",
-    pageSize: 20,
-    priceLevels: PRICE_BUCKETS[price] || undefined,
-    locationBias: {
-      circle: {
-        center: {
-          latitude: lat,
-          longitude: lng,
-        },
-        radius: NEARBY_RADIUS_METERS,
-      },
-    },
   };
 
   try {
-    const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": apiKey,
-        "X-Goog-FieldMask":
-          "places.id,places.displayName,places.formattedAddress,places.location,places.priceLevel,places.primaryTypeDisplayName,places.types,places.googleMapsLinks",
-      },
-      body: JSON.stringify(requestBody),
+    const params = new URLSearchParams({
+      location: `${lat},${lng}`,
+      radius: String(NEARBY_RADIUS_METERS),
+      type: "restaurant",
+      keyword: requestBody.textQuery,
+      language: "zh-TW",
+      key: apiKey,
     });
+
+    const response = await fetch(
+      `https://maps.googleapis.com/maps/api/place/nearbysearch/json?${params.toString()}`
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -175,8 +169,16 @@ module.exports = async function handler(req, res) {
     }
 
     const data = await response.json();
+    if (data.status && data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+      res.status(403).json({
+        error: "Google Places request failed.",
+        details: data.error_message || data.status,
+      });
+      return;
+    }
+
     const origin = { lat, lng };
-    const places = (data.places || [])
+    const places = (data.results || [])
       .map((place) => normalizePlace(place, origin))
       .filter((place) => place.location && place.distanceKm !== null)
       .filter((place) => place.distanceKm <= NEARBY_RADIUS_METERS / 1000)
