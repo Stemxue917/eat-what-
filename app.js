@@ -1,6 +1,7 @@
 const STORAGE_KEYS = {
   dislikes: "what-to-eat-dislikes",
   history: "what-to-eat-history",
+  historyCache: "what-to-eat-history-cache",
 };
 
 const NEARBY_RADIUS_KM = 1.5;
@@ -26,6 +27,38 @@ const DEFAULT_IMAGE =
 const TIMES = ["breakfast", "lunch", "dinner", "late-night"];
 const PRICES = ["0-200", "200-500", "500-1000", "1000+"];
 
+const TYPE_OPTIONS = [
+  "火鍋",
+  "便當",
+  "炸物",
+  "麵食",
+  "壽司",
+  "素食",
+  "早餐",
+  "咖哩",
+  "水餃",
+  "燒肉",
+  "拉麵",
+  "塔可",
+  "咖啡",
+  "漢堡",
+];
+
+const DISLIKE_OPTIONS = [
+  "火鍋",
+  "便當",
+  "炸雞",
+  "拉麵",
+  "壽司",
+  "素食",
+  "咖啡",
+  "漢堡",
+  "牛排",
+  "燒肉",
+  "咖哩",
+  "麵",
+];
+
 const TIME_LABELS = {
   breakfast: "早餐",
   lunch: "午餐",
@@ -41,7 +74,6 @@ const PRICE_LABELS = {
 };
 
 const state = {
-  restaurants: [],
   filters: {
     time: "",
     price: "",
@@ -51,8 +83,10 @@ const state = {
     dislikes: loadStoredArray(STORAGE_KEYS.dislikes),
     history: loadStoredArray(STORAGE_KEYS.history),
   },
+  historyCache: loadStoredArray(STORAGE_KEYS.historyCache),
   location: null,
   currentResult: null,
+  currentPlaces: [],
 };
 
 const elements = {
@@ -98,14 +132,6 @@ function uniqueValues(list) {
   return [...new Set(list)];
 }
 
-function getRestaurantTypes(restaurants) {
-  return uniqueValues(restaurants.map((restaurant) => restaurant.type)).sort();
-}
-
-function getAllTags(restaurants) {
-  return uniqueValues(restaurants.flatMap((restaurant) => restaurant.tags)).sort();
-}
-
 function intersects(listA, listB) {
   const setB = new Set(listB);
   return listA.some((item) => setB.has(item));
@@ -149,9 +175,18 @@ function withDistance(restaurants, location) {
   });
 }
 
+function matchesDislike(restaurant, dislikes) {
+  if (dislikes.length === 0) {
+    return false;
+  }
+
+  const haystack = `${restaurant.name} ${restaurant.type} ${(restaurant.tags || []).join(" ")}`.toLowerCase();
+  return dislikes.some((dislike) => haystack.includes(dislike.toLowerCase()));
+}
+
 function chooseRestaurant(list, user) {
   const withoutDislikes = list.filter(
-    (restaurant) => !intersects(restaurant.tags, user.dislikes)
+    (restaurant) => !matchesDislike(restaurant, user.dislikes)
   );
 
   const withoutHistory = withoutDislikes.filter(
@@ -174,51 +209,39 @@ function chooseRestaurant(list, user) {
   return list.length > 0 ? randomItem(list) : null;
 }
 
-function recommend(restaurants, filters, user, location) {
+function recommend(restaurants, user, location) {
   const enriched = withDistance(restaurants, location);
-
-  const filtered = enriched.filter((restaurant) => {
-    const matchesTime = !filters.time || restaurant.time.includes(filters.time);
-    const matchesPrice = !filters.price || restaurant.price === filters.price;
-    const matchesType = !filters.type || restaurant.type === filters.type;
-    return matchesTime && matchesPrice && matchesType;
-  });
-
-  const nearbyFiltered = filtered.filter(
+  const nearbyFiltered = enriched.filter(
     (restaurant) =>
       typeof restaurant.distanceKm === "number" && restaurant.distanceKm <= NEARBY_RADIUS_KM
   );
 
-  const nearbyChoice = chooseRestaurant(nearbyFiltered, user);
-  if (nearbyChoice) {
-    return nearbyChoice;
-  }
-
-  const fallbackFilteredChoice = chooseRestaurant(filtered, user);
-  if (fallbackFilteredChoice) {
-    return fallbackFilteredChoice;
-  }
-
-  const fullNearby = enriched.filter(
-    (restaurant) =>
-      typeof restaurant.distanceKm === "number" && restaurant.distanceKm <= NEARBY_RADIUS_KM
-  );
-
-  const fullNearbyChoice = chooseRestaurant(fullNearby, user);
-  if (fullNearbyChoice) {
-    return fullNearbyChoice;
+  if (location) {
+    return chooseRestaurant(nearbyFiltered, user);
   }
 
   return chooseRestaurant(enriched, user);
 }
 
-function updateHistory(restaurantId) {
-  const nextHistory = [restaurantId, ...state.user.history.filter((id) => id !== restaurantId)].slice(
+function updateHistory(restaurant) {
+  const nextHistory = [restaurant.id, ...state.user.history.filter((id) => id !== restaurant.id)].slice(
     0,
     5
   );
+  const nextHistoryCache = [
+    {
+      id: restaurant.id,
+      name: restaurant.name,
+      type: restaurant.type,
+      price: restaurant.price,
+    },
+    ...state.historyCache.filter((entry) => entry.id !== restaurant.id),
+  ].slice(0, 5);
+
   state.user.history = nextHistory;
+  state.historyCache = nextHistoryCache;
   saveStoredArray(STORAGE_KEYS.history, nextHistory);
+  saveStoredArray(STORAGE_KEYS.historyCache, nextHistoryCache);
   renderHistory();
 }
 
@@ -243,10 +266,9 @@ function populateSelect(select, values, labelFormatter = (value) => value) {
 }
 
 function renderDislikes() {
-  const allTags = getAllTags(state.restaurants);
   elements.dislikeTags.innerHTML = "";
 
-  allTags.forEach((tag) => {
+  DISLIKE_OPTIONS.forEach((tag) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "tag-button";
@@ -268,7 +290,7 @@ function renderDislikes() {
 function renderHistory() {
   elements.historyList.innerHTML = "";
 
-  if (state.user.history.length === 0) {
+  if (state.historyCache.length === 0) {
     const item = document.createElement("li");
     item.className = "empty";
     item.textContent = "目前還沒有最近紀錄。";
@@ -276,12 +298,11 @@ function renderHistory() {
     return;
   }
 
-  state.user.history.forEach((id) => {
-    const restaurant = state.restaurants.find((entry) => entry.id === id);
+  state.historyCache.forEach((restaurant) => {
     const item = document.createElement("li");
-    item.textContent = restaurant
-      ? `${restaurant.name} · ${restaurant.type} · ${PRICE_LABELS[restaurant.price] || restaurant.price}`
-      : id;
+    item.textContent = `${restaurant.name} · ${restaurant.type} · ${
+      PRICE_LABELS[restaurant.price] || restaurant.price || "價格未知"
+    }`;
     elements.historyList.appendChild(item);
   });
 }
@@ -302,7 +323,7 @@ function renderResult(restaurant) {
   state.currentResult = restaurant;
   elements.resultTitle.textContent = restaurant.name;
   elements.resultType.textContent = restaurant.type;
-  elements.resultPrice.textContent = PRICE_LABELS[restaurant.price] || restaurant.price;
+  elements.resultPrice.textContent = PRICE_LABELS[restaurant.price] || restaurant.price || "價格未知";
   elements.resultDistance.textContent =
     typeof restaurant.distanceKm === "number"
       ? `距離你約 ${restaurant.distanceKm.toFixed(2)} 公里`
@@ -310,10 +331,10 @@ function renderResult(restaurant) {
   elements.resultAddress.textContent = restaurant.address
     ? `地址：${restaurant.address}`
     : "";
-  elements.resultTimes.textContent = `供應時段：${restaurant.time
-    .map((time) => TIME_LABELS[time] || time)
-    .join("、")}`;
-  elements.resultTags.textContent = `標籤：${restaurant.tags.join("、")}`;
+  elements.resultTimes.textContent = state.filters.time
+    ? `搜尋時段：${TIME_LABELS[state.filters.time] || state.filters.time}`
+    : "搜尋時段：不限";
+  elements.resultTags.textContent = `標籤：${(restaurant.tags || []).join("、") || "無"}`;
   elements.resultMapLink.href =
     restaurant.googleMapsUrl ||
     `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
@@ -322,6 +343,39 @@ function renderResult(restaurant) {
   elements.resultImage.src = restaurant.image || DEFAULT_IMAGE;
   elements.resultImage.alt = restaurant.name;
   showView("result");
+}
+
+function bucketPriceLevel(priceLevel) {
+  const priceMap = {
+    PRICE_LEVEL_FREE: "0-200",
+    PRICE_LEVEL_INEXPENSIVE: "0-200",
+    PRICE_LEVEL_MODERATE: "200-500",
+    PRICE_LEVEL_EXPENSIVE: "500-1000",
+    PRICE_LEVEL_VERY_EXPENSIVE: "1000+",
+  };
+
+  return priceMap[priceLevel] || "";
+}
+
+async function fetchPlaces(location, filters) {
+  const params = new URLSearchParams({
+    lat: String(location.lat),
+    lng: String(location.lng),
+    time: filters.time,
+    price: filters.price,
+    type: filters.type,
+  });
+
+  const response = await fetch(`/api/places?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error("Failed to fetch places.");
+  }
+
+  const data = await response.json();
+  return (data.places || []).map((place) => ({
+    ...place,
+    price: bucketPriceLevel(place.priceLevel),
+  }));
 }
 
 async function requestLocation() {
@@ -359,18 +413,35 @@ async function requestLocation() {
 async function runRecommendation() {
   syncFilters();
   const location = state.location || (await requestLocation());
-  const choice = recommend(state.restaurants, state.filters, state.user, location);
-  if (!choice) {
+  if (!location) {
     return;
   }
+
+  elements.locationStatus.textContent = "正在搜尋附近餐廳...";
+
+  try {
+    state.currentPlaces = await fetchPlaces(location, state.filters);
+  } catch (error) {
+    elements.locationStatus.textContent =
+      "目前無法取得 Google 餐廳資料，請確認 Vercel 環境變數與 Google Places API 是否已啟用。";
+    return;
+  }
+
+  const choice = recommend(state.currentPlaces, state.user, location);
+  if (!choice) {
+    elements.locationStatus.textContent = `目前 ${NEARBY_RADIUS_KM} 公里內沒有符合條件的 Google 餐廳結果。`;
+    return;
+  }
+
+  elements.locationStatus.textContent = `已取得附近資料，優先推薦 ${NEARBY_RADIUS_KM} 公里內餐廳。`;
   renderResult(choice);
-  updateHistory(choice.id);
+  updateHistory(choice);
 }
 
 function initFilters() {
   populateSelect(elements.timeFilter, TIMES, (value) => TIME_LABELS[value] || value);
   populateSelect(elements.priceFilter, PRICES, (value) => PRICE_LABELS[value] || value);
-  populateSelect(elements.typeFilter, getRestaurantTypes(state.restaurants), (value) => value);
+  populateSelect(elements.typeFilter, TYPE_OPTIONS, (value) => value);
 }
 
 function registerServiceWorker() {
@@ -401,16 +472,7 @@ function attachEvents() {
   });
 }
 
-async function loadRestaurants() {
-  const response = await fetch("./data/restaurants.json", { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error("Failed to load restaurant data.");
-  }
-  return response.json();
-}
-
 async function init() {
-  state.restaurants = await loadRestaurants();
   initFilters();
   renderDislikes();
   renderHistory();
@@ -422,6 +484,6 @@ init().catch(() => {
   elements.historyList.innerHTML = "";
   const item = document.createElement("li");
   item.className = "empty";
-  item.textContent = "無法載入餐廳資料。";
+  item.textContent = "初始化失敗。";
   elements.historyList.appendChild(item);
 });

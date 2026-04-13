@@ -1,10 +1,9 @@
-const CACHE_NAME = "what-to-eat-app-v1";
+const CACHE_NAME = "what-to-eat-app-v2";
 const APP_ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
-  "./data/restaurants.json",
   "./manifest.webmanifest",
   "./assets/food-card.svg",
   "./icons/icon-192.svg",
@@ -33,6 +32,11 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") {
+    return;
+  }
+
+  const requestUrl = new URL(event.request.url);
+  if (requestUrl.pathname.startsWith("/api/")) {
     return;
   }
 
