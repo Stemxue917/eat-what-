@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f36f45" />
+    <meta
+      name="description"
+      content="一個幫你快速決定今天吃什麼的輕量 PWA。"
+    />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icons/icon-192.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icons/icon-192.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+    <title>吃什麼 App</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <main class="app-card">
+        <section id="home-view" class="view view-active" aria-labelledby="page-title">
+          <p class="eyebrow">吃什麼 App</p>
+          <h1 id="page-title">今天要吃什麼？</h1>
+          <p class="intro">
+            選擇條件、避開不喜歡的食物，馬上得到一個餐廳推薦。
+          </p>
+
+          <section class="panel" aria-labelledby="filters-title">
+            <div class="panel-header">
+              <h2 id="filters-title">篩選條件</h2>
+            </div>
+
+            <div class="filters-grid">
+              <label class="field">
+                <span>時段</span>
+                <select id="time-filter">
+                  <option value="">不限時段</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>價格</span>
+                <select id="price-filter">
+                  <option value="">不限價格</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>類型</span>
+                <select id="type-filter">
+                  <option value="">不限類型</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section class="panel" aria-labelledby="location-title">
+            <div class="panel-header">
+              <h2 id="location-title">附近推薦</h2>
+              <button id="locate-button" class="text-button" type="button">
+                更新定位
+              </button>
+            </div>
+            <p id="location-status" class="helper-text">
+              尚未取得定位，推薦時會先向你請求位置權限。
+            </p>
+          </section>
+
+          <section class="panel" aria-labelledby="dislikes-title">
+            <div class="panel-header">
+              <h2 id="dislikes-title">不想吃</h2>
+              <button id="clear-dislikes" class="text-button" type="button">
+                清除
+              </button>
+            </div>
+            <p class="helper-text">勾選後，系統會優先避開這些食材或口味。</p>
+            <div id="dislike-tags" class="tag-grid" aria-live="polite"></div>
+          </section>
+
+          <section class="panel" aria-labelledby="history-title">
+            <div class="panel-header">
+              <h2 id="history-title">最近吃過</h2>
+              <button id="clear-history" class="text-button" type="button">
+                重設
+              </button>
+            </div>
+            <ul id="history-list" class="history-list"></ul>
+          </section>
+
+          <button id="recommend-button" class="primary-button" type="button">
+            幫我推薦
+          </button>
+        </section>
+
+        <section id="result-view" class="view" aria-labelledby="result-title">
+          <p class="eyebrow">今日推薦</p>
+          <article class="result-card">
+            <div class="result-image-wrap">
+              <img
+                id="result-image"
+                class="result-image"
+                src=""
+                alt=""
+                loading="eager"
+              />
+            </div>
+            <div class="result-body">
+              <h2 id="result-title"></h2>
+              <div class="result-meta">
+                <span id="result-type" class="pill"></span>
+                <span id="result-price" class="pill"></span>
+              </div>
+              <p id="result-distance" class="result-copy"></p>
+              <p id="result-address" class="result-copy"></p>
+              <p id="result-times" class="result-copy"></p>
+              <p id="result-tags" class="result-copy"></p>
+              <a
+                id="result-map-link"
+                class="map-link"
+                href="#"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                在 Google Maps 開啟
+              </a>
+            </div>
+          </article>
+
+          <div class="result-actions">
+            <button id="reroll-button" class="primary-button" type="button">
+              換一家
+            </button>
+            <button id="back-button" class="secondary-button" type="button">
+              返回
+            </button>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
