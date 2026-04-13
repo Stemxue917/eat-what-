@@ -373,12 +373,23 @@ function renderResult(place) {
     ? `搜尋時段：${TIME_LABELS[state.filters.time] || state.filters.time}`
     : "搜尋時段：不限";
   elements.resultTags.textContent = `標籤：${(place.tags || []).join("、") || "無"}`;
-  elements.resultMapLink.href =
-    place.googleMapsUrl ||
-    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.address || place.name)}`;
+  elements.resultMapLink.href = buildGoogleMapsUrl(place);
   elements.resultImage.src = place.image || DEFAULT_IMAGE;
   elements.resultImage.alt = place.name;
   showView("result");
+}
+
+function buildGoogleMapsUrl(place) {
+  if (place.location) {
+    const query = place.name && place.address
+      ? `${place.name} ${place.address}`
+      : place.name || place.address || `${place.location.lat},${place.location.lng}`;
+
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+  }
+
+  return place.googleMapsUrl ||
+    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.address || place.name)}`;
 }
 
 async function fetchMapsConfig() {
@@ -505,9 +516,9 @@ function normalizePlaceResult(place, origin) {
     price: normalizePriceLevel(place.price_level),
     address: place.vicinity || place.formatted_address || "",
     tags: place.types || [],
-    googleMapsUrl: place.place_id
-      ? `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(place.place_id)}`
-      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name || "")}`,
+    googleMapsUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+      [place.name || "", place.vicinity || place.formatted_address || ""].filter(Boolean).join(" ")
+    )}`,
     image: place.photos?.[0]
       ? place.photos[0].getUrl({ maxWidth: 900, maxHeight: 675 })
       : DEFAULT_IMAGE,
